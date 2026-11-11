@@ -8,9 +8,6 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:#050605;overflow:hidden;font-family:Arial,sans-serif;color:#eee}
   canvas{display:block}
-  #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000a;cursor:pointer;text-align:center}
-  #start b{font-size:28px;letter-spacing:.2em}
-  #start span{font-size:13px;color:#aaa;line-height:1.8}
   #cross{position:fixed;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;background:#fff;border-radius:50%;opacity:.7;pointer-events:none}
   [hidden]{display:none!important}
 </style>
@@ -18,8 +15,7 @@
 <script src="photos.js"></script>
 </head>
 <body>
-<div id="start"><b>ДОМ СВЕТА</b><span>Клик — войти<br>WASD — ходить · мышь — смотреть · пробел — прыжок · Shift — шагом<br>Подойди к огоньку или наведи на него прицел</span></div>
-<div id="cross" hidden></div>
+<div id="cross"></div>
 <script type="module">
 import * as THREE from 'three';
 import {RectAreaLightUniformsLib} from 'three/addons/lights/RectAreaLightUniformsLib.js';
@@ -120,16 +116,14 @@ for (let i=0;i<POOL;i++){ const l = new THREE.RectAreaLight(0xffffff,0,1,1); sce
 const flipY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.PI);
 
 // ---------- controls (FPS) ----------
-const startEl = document.getElementById('start'), cross = document.getElementById('cross');
 const canvas = renderer.domElement;
 let yaw = Math.PI, pitch = 0, locked = false;
 const pos = new THREE.Vector3(0, 0, 6), vel = new THREE.Vector3(); let onGround = true;
 const keys = new Set();
-startEl.onclick = () => canvas.requestPointerLock();
 canvas.onclick = () => { if (!locked) canvas.requestPointerLock(); };
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
-  startEl.hidden = locked; cross.hidden = !locked; keys.clear();
+  keys.clear();
 });
 document.addEventListener('mousemove', e => {
   if (!locked) return;
@@ -151,7 +145,7 @@ function frame(){
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
 
   // movement, CS-ish: quick accel, friction, jump, gravity
-  if (locked){
+  {
     const f = (keys.has('KeyW')||keys.has('ArrowUp')) - (keys.has('KeyS')||keys.has('ArrowDown'));
     const s = (keys.has('KeyD')||keys.has('ArrowRight')) - (keys.has('KeyA')||keys.has('ArrowLeft'));
     const speed = (keys.has('ShiftLeft')||keys.has('ShiftRight')) ? 2.4 : 5.2;
@@ -182,7 +176,7 @@ function frame(){
     const ang = fwd.angleTo(tmp);
     p.inView = ang < 0.9;                                   // roughly on screen
     const tol = 0.07 + Math.atan((SMALL_W + p.level*BIG_W)/2/dist); // ~4 deg + panel size
-    if (locked && ang < tol && ang < bestA){ best = p; bestA = ang; }
+    if (ang < tol && ang < bestA){ best = p; bestA = ang; }
   }
   if (best) best.aimT = 0.6;
 
