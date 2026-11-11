@@ -26,21 +26,23 @@ const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.25;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x050605);
-scene.fog = new THREE.Fog(0x050605, 8, 34);
-scene.add(new THREE.HemisphereLight(0x8899aa, 0x221a12, 0.15));
+scene.background = new THREE.Color(0x0b0c0b);
+scene.fog = new THREE.Fog(0x0b0c0b, 14, 45);
+scene.add(new THREE.HemisphereLight(0x9aa6b4, 0x3a3128, 1.3));
+// dim cool skylight from above so the hall reads when every photo is off
+const sky = new THREE.DirectionalLight(0x8090a8, 0.6); sky.position.set(-5,10,3); scene.add(sky);
 
 const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.05, 100);
 camera.rotation.order = 'YXZ';
 
 // ---------- building ----------
 const HALF = 20, H = 7, EYE = 1.65, R = 0.3;
-const concrete = new THREE.MeshStandardMaterial({color:0x6d6a64, roughness:0.85});
-const floorMat = new THREE.MeshStandardMaterial({color:0x2a2724, roughness:0.35, metalness:0.1});
+const concrete = new THREE.MeshStandardMaterial({color:0x8f8b84, roughness:0.9});
+const floorMat = new THREE.MeshStandardMaterial({color:0x3a3632, roughness:0.55, metalness:0.05});
 const colliders = [];
 function block(x,y,z,w,h,d,mat=concrete,solid=true){
   const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
@@ -106,13 +108,17 @@ for (let line=0; line<9; line++){
     const mat = new THREE.MeshBasicMaterial({map:tex, color:0xffffff, side:THREE.DoubleSide, toneMapped:false});
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat);
     const g = new THREE.Group(); g.add(mesh); scene.add(g);
-    panels.push({x:P.x, z:P.z, y:P.y, phase:u*12+line, rot:Math.atan2(-T.z, T.x), g, mesh, mat, tex, level:0, aimT:0});
+    panels.push({x:P.x, z:P.z, y:P.y, phase:u*12+line, rot:Math.atan2(-T.z, T.x), g, mesh, mat, tex, level:0, open:false});
   }
 }
 
 // pool of area lights handed to the most-open photos
 const POOL = 4, lights = [];
-for (let i=0;i<POOL;i++){ const l = new THREE.RectAreaLight(0xffffff,0,1,1); scene.add(l); lights.push(l); }
+for (let i=0;i<POOL;i++){
+  const l = new THREE.RectAreaLight(0xffffff,0,1,1); scene.add(l);
+  l.fill = new THREE.PointLight(0xffffff, 0, 22, 1.1); scene.add(l.fill);
+  lights.push(l);
+}
 const flipY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.PI);
 
 // ---------- controls (FPS) ----------
@@ -120,7 +126,9 @@ const canvas = renderer.domElement;
 let yaw = Math.PI, pitch = 0, locked = false;
 const pos = new THREE.Vector3(0, 0, 6), vel = new THREE.Vector3(); let onGround = true;
 const keys = new Set();
-canvas.onclick = () => { if (!locked) canvas.requestPointerLock(); };
+let aimedPanel = null;
+function press(){ if (aimedPanel) aimedPanel.open = !aimedPanel.open; }
+canvas.onclick = () => { if (!locked) canvas.requestPointerLock(); else press(); };
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
   keys.clear();
@@ -129,7 +137,7 @@ document.addEventListener('mousemove', e => {
   if (!locked) return;
   yaw -= e.movementX*0.0022; pitch = Math.max(-1.5, Math.min(1.5, pitch - e.movementY*0.0022));
 });
-addEventListener('keydown', e => { keys.add(e.code); if (e.code==='Space') e.preventDefault(); });
+addEventListener('keydown', e => { keys.add(e.code); if (e.code==='Space') e.preventDefault(); if (e.code==='KeyE' && !e.repeat) press(); });
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 
@@ -172,19 +180,18 @@ function frame(){
   let best = null, bestA = 1e9;
   for (const p of panels){
     tmp.set(p.x - camera.position.x, p.g.position.y - camera.position.y, p.z - camera.position.z);
-    const dist = tmp.length(); if (dist > 16) continue;
-    const ang = fwd.angleTo(tmp);
+    const dist = tmp.length(), ang = fwd.angleTo(tmp);
     p.inView = ang < 0.9;                                   // roughly on screen
+    if (dist > 16) continue;
     const tol = 0.07 + Math.atan((SMALL_W + p.level*BIG_W)/2/dist); // ~4 deg + panel size
     if (ang < tol && ang < bestA){ best = p; bestA = ang; }
   }
-  if (best) best.aimT = 0.6;
+  aimedPanel = best;
 
   for (const p of panels){
-    p.aimT -= dt;
-    const d = Math.hypot(p.x-pos.x, p.z-pos.z);
-    // open when aimed or close & in view; once you turn away it fades slowly
-    const want = (p.aimT > 0 || (d < 2.8 && p.inView)) ? 1 : 0;
+    // opens only on click / E; once you turn away it closes and fades slowly
+    if (p.open && !p.inView) p.open = false;
+    const want = p.open ? 1 : 0;
     p.level += (want - p.level) * Math.min(1, (want ? 7 : 0.7)*dt);
     const L = p.level;
     // unfold: uniform scale, always 16:9 (never squashed), slight pop at the end
@@ -193,7 +200,7 @@ function frame(){
     p.mesh.scale.set(w, h, 1);
     p.g.rotation.y = p.rot;
     p.g.position.set(p.x, p.y + Math.sin(t*0.9+p.phase)*0.08*(1-L) + L*0.2, p.z);
-    const glow = 0.6 + L*0.9;
+    const glow = 0.6 + L*0.9 + (p === aimedPanel && !p.open ? 0.8 : 0); // aimed chip lights up
     p.mat.color.setScalar(glow);
   }
 
@@ -201,13 +208,16 @@ function frame(){
   const open = panels.filter(p=>p.level>0.02).sort((a,b)=>b.level-a.level);
   lights.forEach((l,i) => {
     const p = open[i];
-    if (!p){ l.intensity = 0; return; }
+    if (!p){ l.intensity = 0; l.fill.intensity = 0; return; }
     l.width = p.mesh.scale.x; l.height = p.mesh.scale.y;
     l.position.copy(p.g.position);
     l.quaternion.copy(p.g.quaternion).multiply(flipY);
     tmp.set(0,0,0.02).applyQuaternion(p.g.quaternion); l.position.add(tmp);
     l.color.copy(p.tex?.userData.color || new THREE.Color(0xffffff));
-    l.intensity = p.level * 45;
+    l.intensity = p.level * 40;
+    tmp.set(0,0,1.6).applyQuaternion(p.g.quaternion);
+    l.fill.position.copy(p.g.position).add(tmp);
+    l.fill.color.copy(l.color); l.fill.intensity = p.level * 9;
   });
 
   renderer.render(scene, camera);
