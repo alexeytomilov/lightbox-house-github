@@ -6,19 +6,30 @@
 <title>Дом света</title>
 <style>
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:#050605;overflow:hidden;font-family:Arial,sans-serif;color:#eee}
+  html,body{margin:0;height:100%;background:#1a1d22;overflow:hidden;font-family:Arial,sans-serif;color:#eee}
   canvas{display:block}
   #cross{position:fixed;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;background:#fff;border-radius:50%;opacity:.7;pointer-events:none}
+  #load{position:fixed;left:50%;top:50%;transform:translate(-50%,24px);font-size:12px;color:#aaa;letter-spacing:.1em}
   [hidden]{display:none!important}
 </style>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<script type="importmap">{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+  "three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.8/build/index.module.js"}}</script>
 <script src="photos.js"></script>
+<script src="scan/house.js"></script>
+<script src="scan/blocking.js"></script>
 </head>
 <body>
 <div id="cross"></div>
+<div id="load">загрузка…</div>
 <script type="module">
 import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
 import {RectAreaLightUniformsLib} from 'three/addons/lights/RectAreaLightUniformsLib.js';
+import {computeBoundsTree, acceleratedRaycast} from 'three-mesh-bvh';
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
 RectAreaLightUniformsLib.init();
 
 // ---------- renderer / scene ----------
@@ -26,44 +37,41 @@ const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.25;
+renderer.toneMappingExposure = 1.1;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b0c0b);
-scene.fog = new THREE.Fog(0x0b0c0b, 14, 45);
-scene.add(new THREE.HemisphereLight(0x9aa6b4, 0x3a3128, 1.3));
-// dim cool skylight from above so the hall reads when every photo is off
-const sky = new THREE.DirectionalLight(0x8090a8, 0.6); sky.position.set(-5,10,3); scene.add(sky);
+const SKY = 0x1a1d22;
+scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.Fog(SKY, 18, 60);
+scene.add(new THREE.HemisphereLight(0xb8c2d0, 0x40382e, 1.6));
+const sun = new THREE.DirectionalLight(0xd0d8e8, 0.7); sun.position.set(-10,20,8); scene.add(sun);
 
-const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.05, 100);
+const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.05, 200);
 camera.rotation.order = 'YXZ';
 
-// ---------- building ----------
-const HALF = 20, H = 7, EYE = 1.65, R = 0.3;
-const concrete = new THREE.MeshStandardMaterial({color:0x8f8b84, roughness:0.9});
-const floorMat = new THREE.MeshStandardMaterial({color:0x3a3632, roughness:0.55, metalness:0.05});
-const colliders = [];
-function block(x,y,z,w,h,d,mat=concrete,solid=true){
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
-  m.position.set(x,y,z); scene.add(m);
-  if (solid) colliders.push({x0:x-w/2, x1:x+w/2, z0:z-d/2, z1:z+d/2, top:y+h/2});
-  return m;
+// Coordinates: Blender (x, y, z-up) -> here (x, z, -y). House floor 1 is at y = 0.
+const EYE = 1.65, R = 0.3, STEP_UP = 0.6;
+const colliders = [];                       // meshes we walk on / bump into
+
+// endless dark ground under the scanned plot
+const groundMat = new THREE.MeshStandardMaterial({color:0x2c2f2a, roughness:1});
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(400,400), groundMat);
+ground.rotation.x = -Math.PI/2; ground.position.y = -1.15; scene.add(ground); colliders.push(ground);
+
+// the front door of the porch is walk-through (scan and blocking both have it closed)
+const DOOR = {x0:-12.2, x1:-8.3, z0:-15.1, z1:-13.5, y1:2.4};
+const inDoor = p => p.x>DOOR.x0 && p.x<DOOR.x1 && p.z>DOOR.z0 && p.z<DOOR.z1 && p.y<DOOR.y1;
+
+async function loadGLB(b64){
+  const buf = await (await fetch('data:application/octet-stream;base64,'+b64)).arrayBuffer();
+  return new Promise((ok, bad) => new GLTFLoader().parse(buf, '', ok, bad));
 }
-block(0,-0.1,0, HALF*2,0.2,HALF*2, floorMat, false);
-block(0,H+0.1,0, HALF*2,0.2,HALF*2, concrete, false);
-block(0,H/2,-HALF, HALF*2,H,0.4); block(0,H/2,HALF, HALF*2,H,0.4);
-block(-HALF,H/2,0, 0.4,H,HALF*2); block(HALF,H/2,0, 0.4,H,HALF*2);
-// columns grid
-for (let x=-12; x<=12; x+=8) for (let z=-12; z<=12; z+=8) block(x,H/2,z, 0.7,H,0.7);
-// a few low walls / crates to run around and jump on
-block(-4,0.5,4, 3,1,0.4); block(6,0.6,-6, 1.2,1.2,1.2); block(7.3,0.6,-6, 1.2,1.2,1.2); block(6.6,1.8,-6, 1.2,1.2,1.2);
-block(-8,1.25,-4, 0.4,2.5,6); block(2,0.45,9, 2,0.9,2);
 
 // ---------- photos ----------
 const loader = new THREE.TextureLoader();
 const textures = (window.PHOTOS||[]).map(src => {
-  const t = loader.load(src, tex => { tex.userData.ready = true; cover16x9(tex); avgColor(tex); });
+  const t = loader.load(src, tex => { cover16x9(tex); avgColor(tex); });
   t.colorSpace = THREE.SRGBColorSpace; t.userData.color = new THREE.Color(0xffe8c8);
   return t;
 });
@@ -73,66 +81,101 @@ function avgColor(t){
   const d = g.getImageData(0,0,4,4).data; let r=0,gg=0,b=0;
   for (let i=0;i<d.length;i+=4){r+=d[i];gg+=d[i+1];b+=d[i+2];}
   const n=d.length/4; t.userData.color.setRGB(r/n/255,gg/n/255,b/n/255,THREE.SRGBColorSpace);
-  // keep it bright enough to light the room
   const hsl={}; t.userData.color.getHSL(hsl); t.userData.color.setHSL(hsl.h, Math.min(1,hsl.s*1.3), 0.6);
 }
-
-// 16:9 everywhere: small chip and opened photo; image is cropped to fill
-const ASPECT = 16/9, SMALL_W = 0.64, BIG_W = 3.0;
+const ASPECT = 16/9, SMALL_W = 0.64, BIG_W = 2.4;
 function cover16x9(t){
   const a = t.image.width/t.image.height;
   if (a > ASPECT){ t.repeat.set(ASPECT/a,1); t.offset.set((1-ASPECT/a)/2,0); }
   else { t.repeat.set(1,a/ASPECT); t.offset.set(0,(1-a/ASPECT)/2); }
 }
-
 const panels = [];
 const rnd = (a,b)=>a+Math.random()*(b-a);
-function freeSpot(x,z){ return !colliders.some(c=>x>c.x0-0.6&&x<c.x1+0.6&&z>c.z0-0.6&&z<c.z1+0.6) && Math.abs(x)<HALF-1.5 && Math.abs(z)<HALF-1.5; }
-// panels stand like dashes along winding lines through the hall
-const STEP = 1.6;
-for (let line=0; line<9; line++){
-  const pts = [];
-  let x = rnd(-HALF+3,HALF-3), z = rnd(-HALF+3,HALF-3), dir = Math.random()*6.28;
-  for (let k=0; k<6; k++){
-    pts.push(new THREE.Vector3(x, rnd(1.5,2.5), z));
-    dir += rnd(-1.1,1.1);
-    x = THREE.MathUtils.clamp(x+Math.cos(dir)*6, -HALF+2, HALF-2);
-    z = THREE.MathUtils.clamp(z+Math.sin(dir)*6, -HALF+2, HALF-2);
-  }
-  const curve = new THREE.CatmullRomCurve3(pts);
-  const n = Math.floor(curve.getLength()/STEP);
-  for (let s=0; s<=n; s++){
-    const u = s/n, P = curve.getPointAt(u), T = curve.getTangentAt(u);
-    if (!freeSpot(P.x,P.z) || Math.hypot(P.x,P.z-6)<2.5 || panels.some(p=>Math.hypot(p.x-P.x,p.z-P.z)<1.3)) continue;
-    const tex = textures.length ? textures[panels.length % textures.length] : null;
-    const mat = new THREE.MeshBasicMaterial({map:tex, color:0xffffff, side:THREE.DoubleSide, toneMapped:false});
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat);
-    const g = new THREE.Group(); g.add(mesh); scene.add(g);
-    panels.push({x:P.x, z:P.z, y:P.y, phase:u*12+line, rot:Math.atan2(-T.z, T.x), g, mesh, mat, tex, level:0, open:false});
-  }
+function addPanel(x,y,z,rot,phase){
+  const tex = textures.length ? textures[panels.length % textures.length] : null;
+  const mat = new THREE.MeshBasicMaterial({map:tex, color:0xffffff, side:THREE.DoubleSide, toneMapped:false});
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat);
+  const g = new THREE.Group(); g.add(mesh); scene.add(g);
+  panels.push({x, z, y, phase, rot, g, mesh, mat, tex, level:0, open:false});
 }
 
 // pool of area lights handed to the most-open photos
 const POOL = 4, lights = [];
 for (let i=0;i<POOL;i++){
   const l = new THREE.RectAreaLight(0xffffff,0,1,1); scene.add(l);
-  l.fill = new THREE.PointLight(0xffffff, 0, 22, 1.1); scene.add(l.fill);
+  l.fill = new THREE.PointLight(0xffffff, 0, 18, 1.1); scene.add(l.fill);
   lights.push(l);
 }
 const flipY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.PI);
 
+// ---------- raycasting helpers ----------
+const rc = new THREE.Raycaster(); rc.firstHitOnly = true;
+const DOWN = new THREE.Vector3(0,-1,0);
+function floorBelow(x, yTop, z, far=40){
+  rc.set(new THREE.Vector3(x,yTop,z), DOWN); rc.far = far;
+  const h = rc.intersectObjects(colliders, false)[0];
+  return h ? h.point.y : -1.15;
+}
+function blocked(from, dir, dist){
+  rc.set(from, dir); rc.far = dist;
+  for (const h of rc.intersectObjects(colliders, false)) if (!inDoor(h.point)) return true;
+  return false;
+}
+// is a spot inside the house footprint (+margin)? Blender footprint x -11.4..3.1, y 6.1..19.8
+const inHouse = (x,z,m=0) => x>-11.4-m && x<3.1+m && z>-19.8-m && z<-6.1+m;
+
+// ---------- load scan + blocking, then place photos ----------
+Promise.all([loadGLB(window.SCAN_B64), loadGLB(window.BLOCK_B64)]).then(([scan, block]) => {
+  scan.scene.traverse(o => { if (o.isMesh){
+    o.material.side = THREE.DoubleSide; o.material.metalness = 0; o.material.roughness = 1;
+    o.geometry.computeBoundsTree(); colliders.push(o);
+  }});
+  scene.add(scan.scene);
+  const grey = new THREE.MeshStandardMaterial({color:0xb9b6b0, roughness:0.95});
+  block.scene.traverse(o => { if (o.isMesh){
+    o.material = grey; o.geometry.computeBoundsTree(); colliders.push(o);
+  }});
+  scene.add(block.scene); blockRoot = block.scene;
+  scene.updateMatrixWorld(true);
+
+  // photos outside: dashes along winding lines over the plot, around the house
+  for (let line=0; line<7; line++){
+    const pts = [];
+    let x = rnd(-20,9), z = rnd(-32,4), dir = Math.random()*6.28;
+    for (let k=0; k<6; k++){
+      pts.push(new THREE.Vector3(x, 0, z));
+      dir += rnd(-1,1);
+      x = THREE.MathUtils.clamp(x+Math.cos(dir)*6, -21, 10);
+      z = THREE.MathUtils.clamp(z+Math.sin(dir)*6, -33, 6);
+    }
+    const curve = new THREE.CatmullRomCurve3(pts), n = Math.floor(curve.getLength()/1.6);
+    for (let s=0; s<=n; s++){
+      const u=s/n, P=curve.getPointAt(u), T=curve.getTangentAt(u);
+      if (inHouse(P.x,P.z,1.2) || panels.some(p=>Math.hypot(p.x-P.x,p.z-P.z)<1.3)) continue;
+      addPanel(P.x, floorBelow(P.x,12,P.z)+rnd(1.4,2.2), P.z, Math.atan2(-T.z,T.x), u*12+line);
+    }
+  }
+  // photos inside, floor 1: scattered in the rooms
+  for (let i=0, tries=0; i<14 && tries<400; tries++){
+    const x=rnd(-8.3,2.4), z=rnd(-17,-7);
+    const f = floorBelow(x, 3.2, z, 4);
+    if (Math.abs(f) > 0.15 || panels.some(p=>Math.hypot(p.x-x,p.z-z)<1.4)) continue;   // only open floor, not furniture
+    addPanel(x, rnd(1.3,1.8), z, Math.floor(Math.random()*4)*Math.PI/2, Math.random()*6); i++;
+  }
+  document.getElementById('load').hidden = true;
+  ready = true;
+}).catch(e => { document.getElementById('load').textContent = 'ошибка загрузки: '+e.message; console.error(e); });
+
 // ---------- controls (FPS) ----------
 const canvas = renderer.domElement;
-let yaw = Math.PI, pitch = 0, locked = false;
-const pos = new THREE.Vector3(0, 0, 6), vel = new THREE.Vector3(); let onGround = true;
+let ready = false, blockRoot = null, lastGround = -0.6;
+let yaw = -Math.PI/2, pitch = 0, locked = false;       // start in front of the porch, facing the door
+const pos = new THREE.Vector3(-13.2, -0.4, -14.3), vel = new THREE.Vector3(); let onGround = false;
 const keys = new Set();
 let aimedPanel = null;
 function press(){ if (aimedPanel) aimedPanel.open = !aimedPanel.open; }
 canvas.onclick = () => { if (!locked) canvas.requestPointerLock(); else press(); };
-document.addEventListener('pointerlockchange', () => {
-  locked = document.pointerLockElement === canvas;
-  keys.clear();
-});
+document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === canvas; keys.clear(); });
 document.addEventListener('mousemove', e => {
   if (!locked) return;
   yaw -= e.movementX*0.0022; pitch = Math.max(-1.5, Math.min(1.5, pitch - e.movementY*0.0022));
@@ -141,69 +184,76 @@ addEventListener('keydown', e => { keys.add(e.code); if (e.code==='Space') e.pre
 addEventListener('keyup', e => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 
-function hits(x,z,feet){ return colliders.some(c => feet < c.top-0.05 && x>c.x0-R && x<c.x1+R && z>c.z0-R && z<c.z1+R); }
-function groundAt(x,z){ let g=0; for (const c of colliders) if (x>c.x0-R&&x<c.x1+R&&z>c.z0-R&&z<c.z1+R && c.top<=pos.y+0.05) g=Math.max(g,c.top); return g; }
-
-const fwd = new THREE.Vector3();
-const tmp = new THREE.Vector3();
+const fwd = new THREE.Vector3(), tmp = new THREE.Vector3(), dirv = new THREE.Vector3(), from = new THREE.Vector3();
+function tryMove(axis, d){
+  if (!d) return;
+  dirv.set(axis==='x'?Math.sign(d):0, 0, axis==='z'?Math.sign(d):0);
+  const dist = Math.abs(d) + R;
+  for (const hgt of [STEP_UP+0.05, 1.2, 1.75]){
+    from.set(pos.x, pos.y+hgt, pos.z);
+    if (blocked(from, dirv, dist)){ vel[axis] = 0; return; }
+  }
+  pos[axis] += d;
+}
 
 // ---------- loop ----------
 const clock = new THREE.Clock();
 function frame(){
   const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
 
-  // movement, CS-ish: quick accel, friction, jump, gravity
-  {
+  if (ready){
     const f = (keys.has('KeyW')||keys.has('ArrowUp')) - (keys.has('KeyS')||keys.has('ArrowDown'));
     const s = (keys.has('KeyD')||keys.has('ArrowRight')) - (keys.has('KeyA')||keys.has('ArrowLeft'));
-    const speed = (keys.has('ShiftLeft')||keys.has('ShiftRight')) ? 2.4 : 5.2;
+    const speed = (keys.has('ShiftLeft')||keys.has('ShiftRight')) ? 2.2 : 4.6;
     const wx = -Math.sin(yaw)*f + Math.cos(yaw)*s, wz = -Math.cos(yaw)*f - Math.sin(yaw)*s;
-    const len = Math.hypot(wx,wz)||1;
-    const k = onGround ? 12 : 2;
+    const len = Math.hypot(wx,wz)||1, k = onGround ? 12 : 2;
     vel.x += ((wx/len)*speed*(f||s?1:0) - vel.x)*Math.min(1,k*dt);
     vel.z += ((wz/len)*speed*(f||s?1:0) - vel.z)*Math.min(1,k*dt);
-    if (keys.has('Space') && onGround){ vel.y = 5.2; onGround = false; }
+    if (keys.has('Space') && onGround){ vel.y = 5.0; onGround = false; }
+    vel.y -= 16*dt;
+    tryMove('x', vel.x*dt); tryMove('z', vel.z*dt);
+    pos.y += vel.y*dt;
+    // the scan's ground has holes: if the ray only finds the fallback plane far below,
+    // keep walking at the last real ground height instead of dropping through
+    let g = floorBelow(pos.x, pos.y+STEP_UP, pos.z);
+    if (g <= -1.14 && lastGround > -1.1) g = lastGround; else if (onGround) lastGround = g;
+    if (pos.y <= g + 0.02 && vel.y <= 0){
+      // walk up small steps smoothly, snap down onto slopes
+      pos.y = THREE.MathUtils.damp(pos.y, g, 18, dt); if (Math.abs(pos.y-g)<0.01) pos.y=g;
+      vel.y = 0; onGround = true;
+    } else if (onGround && pos.y - g < 0.35 && vel.y <= 0){ pos.y = g; vel.y = 0; }
+    else onGround = false;
   }
-  vel.y -= 16*dt;
-  const nx = pos.x + vel.x*dt, nz = pos.z + vel.z*dt;
-  if (!hits(nx,pos.z,pos.y)) pos.x = nx; else vel.x = 0;
-  if (!hits(pos.x,nz,pos.y)) pos.z = nz; else vel.z = 0;
-  pos.y += vel.y*dt;
-  const gnd = groundAt(pos.x,pos.z);
-  if (pos.y <= gnd){ pos.y = gnd; vel.y = 0; onGround = true; } else onGround = false;
   camera.position.set(pos.x, pos.y+EYE, pos.z);
   camera.rotation.set(pitch, yaw, 0);
+  // grey blocking pokes through the scanned facade, so it is drawn only from inside
+  // (it still collides everywhere)
+  if (blockRoot) blockRoot.visible = inHouse(pos.x, pos.z, -0.15);
 
-  // what the crosshair touches
   // forgiving aim: nearest panel within a cone around the crosshair
   camera.getWorldDirection(fwd);
   let best = null, bestA = 1e9;
   for (const p of panels){
     tmp.set(p.x - camera.position.x, p.g.position.y - camera.position.y, p.z - camera.position.z);
     const dist = tmp.length(), ang = fwd.angleTo(tmp);
-    p.inView = ang < 0.9;                                   // roughly on screen
     if (dist > 16) continue;
-    const tol = 0.07 + Math.atan((SMALL_W + p.level*BIG_W)/2/dist); // ~4 deg + panel size
+    const tol = 0.07 + Math.atan((SMALL_W + p.level*BIG_W)/2/dist);
     if (ang < tol && ang < bestA){ best = p; bestA = ang; }
   }
   aimedPanel = best;
 
   for (const p of panels){
     // click / E on the aimed photo opens it, again closes it (closing fades slowly)
-    const want = p.open ? 1 : 0;
-    p.level += (want - p.level) * Math.min(1, (want ? 7 : 0.7)*dt);
+    p.level += ((p.open?1:0) - p.level) * Math.min(1, (p.open ? 7 : 0.7)*dt);
     const L = p.level;
-    // unfold: uniform scale, always 16:9 (never squashed), slight pop at the end
     const e = L<=0 ? 0 : L>=1 ? 1 : 1 + 2.2*Math.pow(L-1,3) + 1.2*Math.pow(L-1,2);
-    const w = THREE.MathUtils.lerp(SMALL_W, BIG_W, e), h = w/ASPECT;
-    p.mesh.scale.set(w, h, 1);
+    const w = THREE.MathUtils.lerp(SMALL_W, BIG_W, e);
+    p.mesh.scale.set(w, w/ASPECT, 1);
     p.g.rotation.y = p.rot;
-    p.g.position.set(p.x, p.y + Math.sin(t*0.9+p.phase)*0.08*(1-L) + L*0.2, p.z);
-    const glow = 0.6 + L*0.9 + (p === aimedPanel && !p.open ? 0.8 : 0); // aimed chip lights up
-    p.mat.color.setScalar(glow);
+    p.g.position.set(p.x, p.y + Math.sin(t*0.9+p.phase)*0.08*(1-L) + L*0.15, p.z);
+    p.mat.color.setScalar(0.6 + L*0.9 + (p === aimedPanel && !p.open ? 0.8 : 0));
   }
 
-  // hand area lights to the brightest photos
   const open = panels.filter(p=>p.level>0.02).sort((a,b)=>b.level-a.level);
   lights.forEach((l,i) => {
     const p = open[i];
@@ -213,10 +263,10 @@ function frame(){
     l.quaternion.copy(p.g.quaternion).multiply(flipY);
     tmp.set(0,0,0.02).applyQuaternion(p.g.quaternion); l.position.add(tmp);
     l.color.copy(p.tex?.userData.color || new THREE.Color(0xffffff));
-    l.intensity = p.level * 40;
-    tmp.set(0,0,1.6).applyQuaternion(p.g.quaternion);
+    l.intensity = p.level * 30;
+    tmp.set(0,0,1.4).applyQuaternion(p.g.quaternion);
     l.fill.position.copy(p.g.position).add(tmp);
-    l.fill.color.copy(l.color); l.fill.intensity = p.level * 9;
+    l.fill.color.copy(l.color); l.fill.intensity = p.level * 7;
   });
 
   renderer.render(scene, camera);
