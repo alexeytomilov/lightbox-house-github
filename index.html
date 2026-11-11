@@ -189,8 +189,7 @@ function frame(){
   aimedPanel = best;
 
   for (const p of panels){
-    // opens only on click / E; once you turn away it closes and fades slowly
-    if (p.open && !p.inView) p.open = false;
+    // click / E on the aimed photo opens it, again closes it (closing fades slowly)
     const want = p.open ? 1 : 0;
     p.level += (want - p.level) * Math.min(1, (want ? 7 : 0.7)*dt);
     const L = p.level;
