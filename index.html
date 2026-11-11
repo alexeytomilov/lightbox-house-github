@@ -1,8 +1,206 @@
 <!doctype html>
-<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Дом света — фотографии, в которых живёт свет</title><meta name="description" content="Прогулка по дому воспоминаний. Включайте фотографии и освещайте пространство."><link rel="stylesheet" href="style.css"><script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script></head>
-<body><div id="scene"></div><header><a class="brand" href="./">ДОМ СВЕТА<span>интерактивное пространство / 001</span></a><button id="help">Управление ↗</button></header>
-<div id="intro"><div class="eyebrow">ПРОСТРАНСТВО ПАМЯТИ</div><h1>У каждого снимка<br>есть свой свет.</h1><p>Войдите в тихий дом. Найдите фотографию.<br>Коснитесь её — и посмотрите, как меняется комната.</p><button id="enter" class="primary">Войти в дом <span>↗</span></button><small>WASD — идти · мышь — смотреть · Shift — бежать</small></div>
-<div id="crosshair" hidden>+</div><div id="hint" hidden></div>
-<aside id="panel" hidden><div class="eyebrow">ФОТОГРАФИЯ / <span id="number">01</span></div><h2 id="title"></h2><p id="caption"></p><button id="toggle">Включить свет</button><label class="slider">Яркость <input id="power" type="range" min="0.2" max="3" step="0.1" value="1.5"></label><label class="upload">Заменить своим снимком <input id="upload" type="file" accept="image/*"></label><small>Снимок остаётся только в этом браузере.</small><button id="close">Закрыть ×</button></aside>
-<footer><div><i></i><span id="status">Три комнаты. Три воспоминания.</span></div><button id="reset">Ко входу ↶</button></footer>
-<dialog id="instructions"><h2>Прогулка по дому</h2><p>WASD или стрелки — движение.<br>Shift — бег. Мышь — свободный осмотр на 360°.<br>Клик по фотографии или E — включить свет, продолжая прогулку.<br>R — настройки и замена снимка.<br>Esc — освободить курсор.<br>Клик по экрану — вернуться к прогулке.</p><p>На телефоне: левая половина экрана — движение, правая — осмотр. Коснитесь фотографии, чтобы включить её.</p><button id="dismiss">Понятно</button></dialog><div id="error" hidden></div><script type="module" src="app.js"></script></body></html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Дом света</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#050605;overflow:hidden;font-family:Arial,sans-serif;color:#eee}
+  canvas{display:block}
+  #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#000a;cursor:pointer;text-align:center}
+  #start b{font-size:28px;letter-spacing:.2em}
+  #start span{font-size:13px;color:#aaa;line-height:1.8}
+  #cross{position:fixed;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;background:#fff;border-radius:50%;opacity:.7;pointer-events:none}
+  [hidden]{display:none!important}
+</style>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<script src="photos.js"></script>
+</head>
+<body>
+<div id="start"><b>ДОМ СВЕТА</b><span>Клик — войти<br>WASD — ходить · мышь — смотреть · пробел — прыжок · Shift — шагом<br>Подойди к огоньку или наведи на него прицел</span></div>
+<div id="cross" hidden></div>
+<script type="module">
+import * as THREE from 'three';
+import {RectAreaLightUniformsLib} from 'three/addons/lights/RectAreaLightUniformsLib.js';
+RectAreaLightUniformsLib.init();
+
+// ---------- renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050605);
+scene.fog = new THREE.Fog(0x050605, 8, 34);
+scene.add(new THREE.HemisphereLight(0x8899aa, 0x221a12, 0.15));
+
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.05, 100);
+camera.rotation.order = 'YXZ';
+
+// ---------- building ----------
+const HALF = 20, H = 7, EYE = 1.65, R = 0.3;
+const concrete = new THREE.MeshStandardMaterial({color:0x6d6a64, roughness:0.85});
+const floorMat = new THREE.MeshStandardMaterial({color:0x2a2724, roughness:0.35, metalness:0.1});
+const colliders = [];
+function block(x,y,z,w,h,d,mat=concrete,solid=true){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), mat);
+  m.position.set(x,y,z); scene.add(m);
+  if (solid) colliders.push({x0:x-w/2, x1:x+w/2, z0:z-d/2, z1:z+d/2, top:y+h/2});
+  return m;
+}
+block(0,-0.1,0, HALF*2,0.2,HALF*2, floorMat, false);
+block(0,H+0.1,0, HALF*2,0.2,HALF*2, concrete, false);
+block(0,H/2,-HALF, HALF*2,H,0.4); block(0,H/2,HALF, HALF*2,H,0.4);
+block(-HALF,H/2,0, 0.4,H,HALF*2); block(HALF,H/2,0, 0.4,H,HALF*2);
+// columns grid
+for (let x=-12; x<=12; x+=8) for (let z=-12; z<=12; z+=8) block(x,H/2,z, 0.7,H,0.7);
+// a few low walls / crates to run around and jump on
+block(-4,0.5,4, 3,1,0.4); block(6,0.6,-6, 1.2,1.2,1.2); block(7.3,0.6,-6, 1.2,1.2,1.2); block(6.6,1.8,-6, 1.2,1.2,1.2);
+block(-8,1.25,-4, 0.4,2.5,6); block(2,0.45,9, 2,0.9,2);
+
+// ---------- photos ----------
+const loader = new THREE.TextureLoader();
+const textures = (window.PHOTOS||[]).map(src => {
+  const t = loader.load(src, tex => { tex.userData.ready = true; avgColor(tex); });
+  t.colorSpace = THREE.SRGBColorSpace; t.userData.color = new THREE.Color(0xffe8c8);
+  return t;
+});
+function avgColor(t){
+  const c = document.createElement('canvas'); c.width = c.height = 4;
+  const g = c.getContext('2d'); g.drawImage(t.image,0,0,4,4);
+  const d = g.getImageData(0,0,4,4).data; let r=0,gg=0,b=0;
+  for (let i=0;i<d.length;i+=4){r+=d[i];gg+=d[i+1];b+=d[i+2];}
+  const n=d.length/4; t.userData.color.setRGB(r/n/255,gg/n/255,b/n/255,THREE.SRGBColorSpace);
+  // keep it bright enough to light the room
+  const hsl={}; t.userData.color.getHSL(hsl); t.userData.color.setHSL(hsl.h, Math.min(1,hsl.s*1.3), 0.6);
+}
+
+const BIG_W = 2.6;              // width of an opened photo, metres
+const panels = [];
+const rnd = (a,b)=>a+Math.random()*(b-a);
+function freeSpot(x,z){ return !colliders.some(c=>x>c.x0-1.2&&x<c.x1+1.2&&z>c.z0-1.2&&z<c.z1+1.2) && Math.abs(x)<HALF-2 && Math.abs(z)<HALF-2; }
+for (let i=0, tries=0; i<30 && tries<2000; tries++){
+  const x=rnd(-HALF+2,HALF-2), z=rnd(-HALF+2,HALF-2);
+  if (!freeSpot(x,z) || Math.hypot(x,z-6)<3 || panels.some(p=>Math.hypot(p.x-x,p.z-z)<3.2)) continue;
+  const tex = textures.length ? textures[i % textures.length] : null;
+  const mat = new THREE.MeshBasicMaterial({map:tex, color:0xffffff, side:THREE.DoubleSide, toneMapped:false});
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat);
+  const g = new THREE.Group(); g.add(mesh); scene.add(g);
+  panels.push({x, z, y:rnd(1.5,2.4), phase:Math.random()*6.28, rot:Math.random()*6.28, spin:rnd(-.6,.6), g, mesh, mat, tex, level:0, aimT:0});
+  i++;
+}
+
+// pool of area lights handed to the most-open photos
+const POOL = 4, lights = [];
+for (let i=0;i<POOL;i++){ const l = new THREE.RectAreaLight(0xffffff,0,1,1); scene.add(l); lights.push(l); }
+const flipY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.PI);
+
+// ---------- controls (FPS) ----------
+const startEl = document.getElementById('start'), cross = document.getElementById('cross');
+const canvas = renderer.domElement;
+let yaw = Math.PI, pitch = 0, locked = false;
+const pos = new THREE.Vector3(0, 0, 6), vel = new THREE.Vector3(); let onGround = true;
+const keys = new Set();
+startEl.onclick = () => canvas.requestPointerLock();
+canvas.onclick = () => { if (!locked) canvas.requestPointerLock(); };
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === canvas;
+  startEl.hidden = locked; cross.hidden = !locked; keys.clear();
+});
+document.addEventListener('mousemove', e => {
+  if (!locked) return;
+  yaw -= e.movementX*0.0022; pitch = Math.max(-1.5, Math.min(1.5, pitch - e.movementY*0.0022));
+});
+addEventListener('keydown', e => { keys.add(e.code); if (e.code==='Space') e.preventDefault(); });
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => keys.clear());
+
+function hits(x,z,feet){ return colliders.some(c => feet < c.top-0.05 && x>c.x0-R && x<c.x1+R && z>c.z0-R && z<c.z1+R); }
+function groundAt(x,z){ let g=0; for (const c of colliders) if (x>c.x0-R&&x<c.x1+R&&z>c.z0-R&&z<c.z1+R && c.top<=pos.y+0.05) g=Math.max(g,c.top); return g; }
+
+const ray = new THREE.Raycaster(), center = new THREE.Vector2();
+const tmp = new THREE.Vector3();
+
+// ---------- loop ----------
+const clock = new THREE.Clock();
+function frame(){
+  const dt = Math.min(clock.getDelta(), 0.05), t = clock.elapsedTime;
+
+  // movement, CS-ish: quick accel, friction, jump, gravity
+  if (locked){
+    const f = (keys.has('KeyW')||keys.has('ArrowUp')) - (keys.has('KeyS')||keys.has('ArrowDown'));
+    const s = (keys.has('KeyD')||keys.has('ArrowRight')) - (keys.has('KeyA')||keys.has('ArrowLeft'));
+    const speed = (keys.has('ShiftLeft')||keys.has('ShiftRight')) ? 2.4 : 5.2;
+    const wx = -Math.sin(yaw)*f + Math.cos(yaw)*s, wz = -Math.cos(yaw)*f - Math.sin(yaw)*s;
+    const len = Math.hypot(wx,wz)||1;
+    const k = onGround ? 12 : 2;
+    vel.x += ((wx/len)*speed*(f||s?1:0) - vel.x)*Math.min(1,k*dt);
+    vel.z += ((wz/len)*speed*(f||s?1:0) - vel.z)*Math.min(1,k*dt);
+    if (keys.has('Space') && onGround){ vel.y = 5.2; onGround = false; }
+  }
+  vel.y -= 16*dt;
+  const nx = pos.x + vel.x*dt, nz = pos.z + vel.z*dt;
+  if (!hits(nx,pos.z,pos.y)) pos.x = nx; else vel.x = 0;
+  if (!hits(pos.x,nz,pos.y)) pos.z = nz; else vel.z = 0;
+  pos.y += vel.y*dt;
+  const gnd = groundAt(pos.x,pos.z);
+  if (pos.y <= gnd){ pos.y = gnd; vel.y = 0; onGround = true; } else onGround = false;
+  camera.position.set(pos.x, pos.y+EYE, pos.z);
+  camera.rotation.set(pitch, yaw, 0);
+
+  // what the crosshair touches
+  ray.setFromCamera(center, camera);
+  const aimed = locked ? ray.intersectObjects(panels.map(p=>p.mesh))[0] : null;
+  if (aimed && aimed.distance < 14) panels.find(p=>p.mesh===aimed.object).aimT = 1.2;
+
+  for (const p of panels){
+    p.aimT -= dt;
+    const d = Math.hypot(p.x-pos.x, p.z-pos.z);
+    const want = (d < 3.6 || p.aimT > 0) ? 1 : 0;
+    p.level += (want - p.level) * Math.min(1, (want ? 2.6 : 1.4)*dt);
+    const L = p.level;
+    // unfold: first stretch sideways, then open downward
+    const a = THREE.MathUtils.smoothstep(L, 0, 0.5), b = THREE.MathUtils.smoothstep(L, 0.35, 1);
+    const img = p.tex?.image, aspect = img?.width ? img.width/img.height : 1.5;
+    const w = THREE.MathUtils.lerp(0.32, BIG_W, a), h = THREE.MathUtils.lerp(0.035, BIG_W/aspect, b);
+    p.mesh.scale.set(w, h, 1);
+    // small: hovers & turns lazily; open: turns to face you
+    const face = Math.atan2(pos.x-p.x, pos.z-p.z);
+    p.rot += p.spin*dt*(1-L);
+    let diff = ((face - p.rot + Math.PI) % (2*Math.PI) + 2*Math.PI) % (2*Math.PI) - Math.PI;
+    p.rot += diff * Math.min(1, 3*L*dt);
+    p.g.rotation.y = p.rot;
+    p.g.position.set(p.x, p.y + Math.sin(t*0.9+p.phase)*0.08*(1-L) + L*0.2, p.z);
+    const glow = 0.6 + L*0.9;
+    p.mat.color.setScalar(glow);
+  }
+
+  // hand area lights to the brightest photos
+  const open = panels.filter(p=>p.level>0.02).sort((a,b)=>b.level-a.level);
+  lights.forEach((l,i) => {
+    const p = open[i];
+    if (!p){ l.intensity = 0; return; }
+    l.width = p.mesh.scale.x; l.height = p.mesh.scale.y;
+    l.position.copy(p.g.position);
+    l.quaternion.copy(p.g.quaternion).multiply(flipY);
+    tmp.set(0,0,0.02).applyQuaternion(p.g.quaternion); l.position.add(tmp);
+    l.color.copy(p.tex?.userData.color || new THREE.Color(0xffffff));
+    l.intensity = p.level * 45;
+  });
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+frame();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
