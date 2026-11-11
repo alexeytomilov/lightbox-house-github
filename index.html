@@ -82,15 +82,15 @@ function avgColor(t){
 const BIG_W = 2.6;              // width of an opened photo, metres
 const panels = [];
 const rnd = (a,b)=>a+Math.random()*(b-a);
-function freeSpot(x,z){ return !colliders.some(c=>x>c.x0-1.2&&x<c.x1+1.2&&z>c.z0-1.2&&z<c.z1+1.2) && Math.abs(x)<HALF-2 && Math.abs(z)<HALF-2; }
-for (let i=0, tries=0; i<30 && tries<2000; tries++){
+function freeSpot(x,z){ return !colliders.some(c=>x>c.x0-0.8&&x<c.x1+0.8&&z>c.z0-0.8&&z<c.z1+0.8) && Math.abs(x)<HALF-2 && Math.abs(z)<HALF-2; }
+for (let i=0, tries=0; i<80 && tries<5000; tries++){
   const x=rnd(-HALF+2,HALF-2), z=rnd(-HALF+2,HALF-2);
-  if (!freeSpot(x,z) || Math.hypot(x,z-6)<3 || panels.some(p=>Math.hypot(p.x-x,p.z-z)<3.2)) continue;
+  if (!freeSpot(x,z) || Math.hypot(x,z-6)<3 || panels.some(p=>Math.hypot(p.x-x,p.z-z)<1.7)) continue;
   const tex = textures.length ? textures[i % textures.length] : null;
   const mat = new THREE.MeshBasicMaterial({map:tex, color:0xffffff, side:THREE.DoubleSide, toneMapped:false});
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1,1), mat);
   const g = new THREE.Group(); g.add(mesh); scene.add(g);
-  panels.push({x, z, y:rnd(1.5,2.4), phase:Math.random()*6.28, rot:Math.random()*6.28, spin:rnd(-.6,.6), g, mesh, mat, tex, level:0, aimT:0});
+  panels.push({x, z, y:rnd(1.5,2.4), phase:Math.random()*6.28, rot:Math.floor(Math.random()*4)*Math.PI/2, g, mesh, mat, tex, level:0, aimT:0});
   i++;
 }
 
@@ -160,19 +160,14 @@ function frame(){
   for (const p of panels){
     p.aimT -= dt;
     const d = Math.hypot(p.x-pos.x, p.z-pos.z);
-    const want = (d < 3.6 || p.aimT > 0) ? 1 : 0;
-    p.level += (want - p.level) * Math.min(1, (want ? 2.6 : 1.4)*dt);
+    const want = (d < 2.8 || p.aimT > 0) ? 1 : 0;
+    p.level += (want - p.level) * Math.min(1, (want ? 7 : 3.5)*dt);
     const L = p.level;
     // unfold: first stretch sideways, then open downward
     const a = THREE.MathUtils.smoothstep(L, 0, 0.5), b = THREE.MathUtils.smoothstep(L, 0.35, 1);
     const img = p.tex?.image, aspect = img?.width ? img.width/img.height : 1.5;
     const w = THREE.MathUtils.lerp(0.32, BIG_W, a), h = THREE.MathUtils.lerp(0.035, BIG_W/aspect, b);
     p.mesh.scale.set(w, h, 1);
-    // small: hovers & turns lazily; open: turns to face you
-    const face = Math.atan2(pos.x-p.x, pos.z-p.z);
-    p.rot += p.spin*dt*(1-L);
-    let diff = ((face - p.rot + Math.PI) % (2*Math.PI) + 2*Math.PI) % (2*Math.PI) - Math.PI;
-    p.rot += diff * Math.min(1, 3*L*dt);
     p.g.rotation.y = p.rot;
     p.g.position.set(p.x, p.y + Math.sin(t*0.9+p.phase)*0.08*(1-L) + L*0.2, p.z);
     const glow = 0.6 + L*0.9;
