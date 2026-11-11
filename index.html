@@ -95,14 +95,18 @@ function addPanel(x,y,z,rot,phase){
   panels.push({x, z, y, phase, rot, g, mesh, mat, tex, level:0, open:false});
 }
 
-// pool of area lights handed to the most-open photos
-const POOL = 4, lights = [];
-for (let i=0;i<POOL;i++){
-  const l = new THREE.RectAreaLight(0xffffff,0,1,1); scene.add(l);
-  l.fill = new THREE.PointLight(0xffffff, 0, 18, 1.1); scene.add(l.fill);
-  lights.push(l);
-}
+// Light slots for open photos. Each slot = a soft area light on BOTH faces of the photo
+// (photos hang free in space, so they shine both ways) + a gentle omni glow for the room.
+// A photo keeps its slot until it has fully faded, so lights never jump between photos.
+const POOL = 6, slots = [];
 const flipY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.PI);
+for (let i=0;i<POOL;i++){
+  const front = new THREE.RectAreaLight(0xffffff,0,1,1), back = new THREE.RectAreaLight(0xffffff,0,1,1);
+  const glow = new THREE.PointLight(0xffffff, 0, 9, 2);
+  scene.add(front, back, glow);
+  slots.push({front, back, glow, panel:null});
+}
+const WARM = new THREE.Color(0xffe2c0), lightCol = new THREE.Color();
 
 // ---------- raycasting helpers ----------
 const rc = new THREE.Raycaster(); rc.firstHitOnly = true;
@@ -121,12 +125,13 @@ const inHouse = (x,z,m=0) => x>-11.4-m && x<3.1+m && z>-19.8-m && z<-6.1+m;
 
 // ---------- load scan + blocking, then place photos ----------
 Promise.all([loadGLB(window.SCAN_B64), loadGLB(window.BLOCK_B64)]).then(([scan, block]) => {
+  // one flat grey for everything: the scan and the blocking
+  const grey = new THREE.MeshStandardMaterial({color:0xa9a7a3, roughness:1, metalness:0});
+  const greyScan = grey.clone(); greyScan.side = THREE.DoubleSide;
   scan.scene.traverse(o => { if (o.isMesh){
-    o.material.side = THREE.DoubleSide; o.material.metalness = 0; o.material.roughness = 1;
-    o.geometry.computeBoundsTree(); colliders.push(o);
+    o.material = greyScan; o.geometry.computeBoundsTree(); colliders.push(o);
   }});
   scene.add(scan.scene);
-  const grey = new THREE.MeshStandardMaterial({color:0xb9b6b0, roughness:0.95});
   block.scene.traverse(o => { if (o.isMesh){
     o.material = grey; o.geometry.computeBoundsTree(); colliders.push(o);
   }});
@@ -249,20 +254,28 @@ function frame(){
     p.mat.color.setScalar(0.6 + L*0.9 + (p === aimedPanel && !p.open ? 0.8 : 0));
   }
 
-  const open = panels.filter(p=>p.level>0.02).sort((a,b)=>b.level-a.level);
-  lights.forEach((l,i) => {
-    const p = open[i];
-    if (!p){ l.intensity = 0; l.fill.intensity = 0; return; }
-    l.width = p.mesh.scale.x; l.height = p.mesh.scale.y;
-    l.position.copy(p.g.position);
-    l.quaternion.copy(p.g.quaternion).multiply(flipY);
-    tmp.set(0,0,0.02).applyQuaternion(p.g.quaternion); l.position.add(tmp);
-    l.color.copy(p.tex?.userData.color || new THREE.Color(0xffffff));
-    l.intensity = p.level * 45;
-    tmp.set(0,0,1.4).applyQuaternion(p.g.quaternion);
-    l.fill.position.copy(p.g.position).add(tmp);
-    l.fill.color.copy(l.color); l.fill.intensity = p.level * 14;
-  });
+  // release slots of faded photos, give free slots to newly opened ones
+  for (const sl of slots) if (sl.panel && sl.panel.level < 0.01 && !sl.panel.open){ sl.panel.slot = null; sl.panel = null; }
+  for (const p of panels) if (p.open && !p.slot){
+    let sl = slots.find(x => !x.panel);
+    if (!sl) sl = slots.reduce((a,b) => (a.panel.level < b.panel.level ? a : b));   // steal the dimmest
+    if (sl.panel) sl.panel.slot = null;
+    sl.panel = p; p.slot = sl;
+  }
+  for (const sl of slots){
+    const p = sl.panel;
+    if (!p){ sl.front.intensity = sl.back.intensity = sl.glow.intensity = 0; continue; }
+    const L = p.level, w = p.mesh.scale.x, h = p.mesh.scale.y;
+    lightCol.copy(p.tex?.userData.color || WARM).lerp(WARM, 0.45);
+    for (const [l, q] of [[sl.front, null], [sl.back, flipY]]){
+      l.width = w; l.height = h; l.color.copy(lightCol);
+      l.position.copy(p.g.position);
+      l.quaternion.copy(p.g.quaternion); if (q === null) l.quaternion.multiply(flipY);
+      l.intensity = L * 9;
+    }
+    sl.glow.position.copy(p.g.position); sl.glow.color.copy(lightCol);
+    sl.glow.intensity = L * 2.5;
+  }
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
